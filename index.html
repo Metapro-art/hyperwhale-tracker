@@ -142,6 +142,15 @@
   .acc-head .hval{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:var(--mint);text-align:right}
   .acc-head .edit-btn{padding:5px 9px;font-size:12px;opacity:.55}
   .acc-head .edit-btn:hover{opacity:1}
+  .acc-head .bell-btn{padding:5px 9px;font-size:12px;opacity:.5;filter:grayscale(1)}
+  .acc-head .bell-btn.active{opacity:1;filter:none;border-color:var(--mint-deep);background:rgba(126,244,216,.10)}
+  .acc-head .bell-btn:hover{opacity:1}
+  .acc-head .bell-on{font-size:11px;margin-left:2px}
+  .alert-ctrl{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding:9px 11px;background:#0a1714;border:1px solid var(--line);border-radius:10px;font-family:'JetBrains Mono',monospace;font-size:11.5px}
+  .alert-ctrl .ac-status{color:var(--mint)}
+  .alert-ctrl .ac-status.muted{color:var(--dim)}
+  .alert-ctrl .ac-btns{display:flex;gap:6px}
+  .alert-ctrl .mini{padding:5px 9px;font-size:11px}
   .acc-body{display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
   .card.open .acc-body{display:block;animation:slideDown .28s ease}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
@@ -277,6 +286,7 @@
     <aside class="side-panel">
       <div class="panel">
         <h3>Feed de alertas <span class="right"><span class="cnt" id="alertCnt">0</span><button class="ghost clearbtn" onclick="clearAlerts()">limpiar</button></span></h3>
+        <div class="alert-ctrl" id="alertCtrl"></div>
         <div class="feed" id="feed"><div class="feed-empty">Esperando movimientos de las wallets vigiladas…</div></div>
       </div>
 
@@ -285,10 +295,11 @@
       </div>
 
       <div class="note">
-        <b style="color:var(--muted)">Cómo funcionan las alertas</b><br>
-        • Compara las posiciones con la lectura anterior, cada intervalo.<br>
+        <b style="color:var(--muted)">Cómo elegir qué wallets alertan</b><br>
+        • La 🔔 de cada wallet enciende/apaga sus alertas. Solo las que tengan 🔔 aparecen en este feed.<br>
+        • Dentro de una wallet, "🎯 solo esta" silencia todas las demás de golpe.<br>
         • On-chain solo se detecta la entrada en el momento de ejecutarse (segundos), no antes.<br>
-        • Los avisos 🔔 solo suenan con la pestaña abierta. Para Telegram/Discord 24/7 hace falta un backend (GitHub Actions cron).
+        • Los avisos 🔔 del navegador solo suenan con la pestaña abierta. Para Telegram/Discord 24/7 hace falta un backend.
       </div>
     </aside>
   </div>
@@ -392,7 +403,8 @@ function diffPositions(w,st){
   (st.assetPositions||[]).forEach(ap=>{const p=ap.position;cur[p.coin]=parseFloat(p.szi);});
   const s=snaps[w.addr]||(snaps[w.addr]={positions:{},primed:false,fillsOpen:false,fills:[]});
   const prev=s.positions;
-  if(s.primed){
+  const alertsOn = (w.alerts!==false); // por defecto activadas
+  if(s.primed && alertsOn){
     Object.keys(cur).forEach(coin=>{
       const c=cur[coin],pv=prev[coin];
       if(pv===undefined){
@@ -406,7 +418,7 @@ function diffPositions(w,st){
     });
     Object.keys(prev).forEach(coin=>{ if(cur[coin]===undefined) pushAlert(w,coin,"close",`CERRÓ ${coin}`,`posición eliminada`); });
   }
-  s.positions=cur; s.primed=true;
+  s.positions=cur; s.primed=true; // el snapshot SIEMPRE se actualiza, aunque las alertas estén off
 }
 function pushAlert(w,coin,kind,head,msg){
   const cls=kind==="open"?"open":kind==="close"?"close":kind==="flip"?"flip":"";
@@ -425,6 +437,22 @@ function renameWallet(addr){
   const t=nuevo.trim();
   w.label = t || short(addr);          // si lo deja vacío, usa la dirección corta
   saveWatch(); renderCards(); renderAgg();
+}
+
+/* ---------- alertas por wallet ---------- */
+function toggleWalletAlerts(addr){
+  const w=watch.find(x=>x.addr===addr); if(!w) return;
+  w.alerts = (w.alerts===false); // invierte: undefined/true -> false ; false -> true
+  saveWatch(); renderCards();
+}
+function alertsOnlyThis(addr){
+  // activa alertas solo para esta wallet, apaga el resto
+  watch.forEach(w=>{ w.alerts = (w.addr===addr); });
+  saveWatch(); renderCards();
+}
+function setAllAlerts(on){
+  watch.forEach(w=>{ w.alerts = on; });
+  saveWatch(); renderCards();
 }
 
 /* ---------- fills + edad de posición ---------- */
@@ -546,13 +574,15 @@ function renderCards(){
       : (w._err?`<span class="pnl-neg">no cargó</span>`:`<span>cargando…</span>`);
     const headVal = st&&!w._err ? usd(m.acct) : "—";
 
+    const alertsOn=(w.alerts!==false);
     const head=`<div class="acc-head" onclick="toggleWallet('${w.addr}')">
         <span class="chev">▶</span>
         <div class="htitle">
-          <div class="clabel">${w.label} <span class="tag-dot ${dotCls}">${dotTxt}</span></div>
+          <div class="clabel">${w.label} <span class="tag-dot ${dotCls}">${dotTxt}</span>${alertsOn?'<span class="bell-on" title="alertas activadas">🔔</span>':''}</div>
           <div class="hmeta">${headMeta}</div>
         </div>
         <div class="hright">
+          <button class="mini ghost bell-btn ${alertsOn?'active':''}" onclick="event.stopPropagation();toggleWalletAlerts('${w.addr}')" title="${alertsOn?'alertas activadas — clic para silenciar':'alertas silenciadas — clic para activar'}">${alertsOn?'🔔':'🔕'}</button>
           <button class="mini ghost edit-btn" onclick="event.stopPropagation();renameWallet('${w.addr}')" title="renombrar">✎</button>
           <div class="hval">${headVal}</div>
         </div>
@@ -608,7 +638,9 @@ function renderCards(){
         ${stats}${rows}
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <span class="togg" onclick="event.stopPropagation();toggleFills('${w.addr}')">${(s&&s.fillsOpen)?'▾ ocultar historial':'▸ ver operaciones recientes'}</span>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="mini ghost" onclick="event.stopPropagation();toggleWalletAlerts('${w.addr}')">${alertsOn?'🔕 silenciar alertas':'🔔 activar alertas'}</button>
+            <button class="mini ghost" onclick="event.stopPropagation();alertsOnlyThis('${w.addr}')" title="alertas solo de esta wallet">🎯 solo esta</button>
             <button class="mini ghost" onclick="event.stopPropagation();renameWallet('${w.addr}')">✎ renombrar</button>
             <button class="mini ghost" onclick="event.stopPropagation();removeAddress('${w.addr}')">quitar wallet</button>
           </div>
@@ -619,6 +651,25 @@ function renderCards(){
 
     return `<div class="card ${isOpen?'open':'collapsed'}" id="card-${w.addr}">${head}${body}</div>`;
   }).join("");
+  renderAlertCtrl();
+}
+
+/* ---------- control de alertas del panel ---------- */
+function renderAlertCtrl(){
+  const el=document.getElementById("alertCtrl"); if(!el) return;
+  const total=watch.length;
+  const on=watch.filter(w=>w.alerts!==false).length;
+  if(!total){ el.innerHTML=""; return; }
+  let txt, cls="";
+  if(on===total) txt=`🔔 alertando todas (${total})`;
+  else if(on===0){ txt=`🔕 todas silenciadas`; cls="muted"; }
+  else txt=`🔔 alertando ${on} de ${total}`;
+  el.innerHTML=`
+    <span class="ac-status ${cls}">${txt}</span>
+    <span class="ac-btns">
+      <button class="mini ghost" onclick="setAllAlerts(true)">todas</button>
+      <button class="mini ghost" onclick="setAllAlerts(false)">ninguna</button>
+    </span>`;
 }
 
 function renderAlerts(){
