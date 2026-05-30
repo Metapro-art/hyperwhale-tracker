@@ -140,6 +140,8 @@
   .acc-head .hmeta .pnl-neg{color:var(--red)}
   .acc-head .hright{display:flex;align-items:center;gap:8px;flex:0 0 auto}
   .acc-head .hval{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:var(--mint);text-align:right}
+  .acc-head .edit-btn{padding:5px 9px;font-size:12px;opacity:.55}
+  .acc-head .edit-btn:hover{opacity:1}
   .acc-body{display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
   .card.open .acc-body{display:block;animation:slideDown .28s ease}
   @keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
@@ -313,6 +315,7 @@ let alerts = loadAlerts();
 let timer=null, countdownTimer=null, nextAt=0, notifOn=false;
 let sortKey="value", biasFilter="all";
 let openAddr=null; // wallet actualmente expandida (acordeón)
+let firstRender=true; // para abrir la primera solo al cargar, no impedir cerrarlas todas
 
 /* ---------- persistencia ---------- */
 function loadWatch(){ try{const s=localStorage.getItem("hw_watch");if(s)return JSON.parse(s);}catch(e){} return [...DEFAULT_WATCH]; }
@@ -337,7 +340,11 @@ function timeAgo(ms){const s=Math.floor((Date.now()-ms)/1000);if(s<60)return s+"
 function toggleLeaderboard(){ document.getElementById("lbPanel").classList.toggle("open"); }
 function setSort(k){ sortKey=k; document.querySelectorAll("#sortSeg button").forEach(b=>b.classList.toggle("on",b.dataset.sort===k)); renderCards(); }
 function setBias(b){ biasFilter=b; document.querySelectorAll("#biasSeg button").forEach(x=>x.classList.toggle("on",x.dataset.bias===b)); renderCards(); }
-function toggleWallet(addr){ openAddr=(openAddr===addr)?null:addr; renderCards(); }
+async function toggleWallet(addr){
+  openAddr=(openAddr===addr)?null:addr;
+  renderCards();
+  if(openAddr){ await loadFills(openAddr); renderCards(); }
+}
 function showToast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1400); }
 function copyAddr(a){ navigator.clipboard?.writeText(a).then(()=>showToast("dirección copiada")).catch(()=>{}); }
 
@@ -410,13 +417,59 @@ function pushAlert(w,coin,kind,head,msg){
 }
 function clearAlerts(){ alerts=[]; saveAlerts(); renderAlerts(); }
 
-/* ---------- fills ---------- */
+/* ---------- renombrar etiqueta ---------- */
+function renameWallet(addr){
+  const w=watch.find(x=>x.addr===addr); if(!w) return;
+  const nuevo=prompt("Nueva etiqueta para esta wallet:", w.label);
+  if(nuevo===null) return;            // canceló
+  const t=nuevo.trim();
+  w.label = t || short(addr);          // si lo deja vacío, usa la dirección corta
+  saveWatch(); renderCards(); renderAgg();
+}
+
+/* ---------- fills + edad de posición ---------- */
+// Carga fills (hasta 2000) y los cachea en el snapshot
+async function loadFills(addr, force=false){
+  const s=snaps[addr]; if(!s) return;
+  if(s.fillsRaw && !force) return;
+  try{
+    const fills=await api({type:"userFills",user:addr});
+    s.fillsRaw=(fills||[]);
+    s.posAge=computePosAges(s.fillsRaw); // {coin: openTimeMs}
+  }catch(e){ s.fillsRaw=s.fillsRaw||[]; }
+}
+
+// Para cada moneda, halla cuándo se abrió la posición ACTUAL:
+// recorre fills de viejo→nuevo; cuando startPosition≈0 y el fill abre, ese es el inicio.
+function computePosAges(fills){
+  const byCoin={};
+  // ordenar ascendente por tiempo
+  const asc=[...fills].sort((a,b)=>a.time-b.time);
+  asc.forEach(fl=>{
+    const coin=fl.coin;
+    const start=parseFloat(fl.startPosition||"0");
+    // si la posición estaba en (casi) cero antes de este fill, es un nuevo inicio
+    if(Math.abs(start)<1e-9){ byCoin[coin]=fl.time; }
+    // si no había registro aún, usar el primero que veamos
+    else if(byCoin[coin]===undefined){ byCoin[coin]=fl.time; }
+  });
+  return byCoin;
+}
+
+// formatea duración legible
+function ageFmt(ms){
+  if(!ms) return "—";
+  const s=Math.floor((Date.now()-ms)/1000);
+  if(s<60) return s+"s";
+  const m=Math.floor(s/60); if(m<60) return m+"m";
+  const h=Math.floor(m/60); if(h<24) return h+"h "+(m%60)+"m";
+  const d=Math.floor(h/24); return d+"d "+(h%24)+"h";
+}
+
 async function toggleFills(addr){
   const s=snaps[addr]; if(!s)return;
   s.fillsOpen=!s.fillsOpen;
-  if(s.fillsOpen&&!s.fills.length){
-    try{const fills=await api({type:"userFills",user:addr});s.fills=(fills||[]).slice(0,12);}catch(e){s.fills=[];}
-  }
+  if(s.fillsOpen) await loadFills(addr);
   renderCards();
 }
 
@@ -471,8 +524,9 @@ function renderCards(){
   if(!watch.length){ root.innerHTML='<div class="empty">No hay wallets en la lista. Pega una dirección 0x arriba o abre 📊 Leaderboards.</div>'; return; }
   if(!list.length){ root.innerHTML='<div class="empty">Ninguna wallet coincide con el filtro.</div>'; return; }
 
-  // Si nadie está abierto aún, abre la primera de la lista por defecto
-  if(openAddr===null && list.length) openAddr=list[0].addr;
+  // Abre la primera SOLO en la carga inicial; después respeta que el usuario las cierre todas
+  if(firstRender && openAddr===null && list.length) openAddr=list[0].addr;
+  firstRender=false;
 
   root.innerHTML=list.map(w=>{
     const st=w._state,s=snaps[w.addr];
@@ -498,7 +552,10 @@ function renderCards(){
           <div class="clabel">${w.label} <span class="tag-dot ${dotCls}">${dotTxt}</span></div>
           <div class="hmeta">${headMeta}</div>
         </div>
-        <div class="hright"><div class="hval">${headVal}</div></div>
+        <div class="hright">
+          <button class="mini ghost edit-btn" onclick="event.stopPropagation();renameWallet('${w.addr}')" title="renombrar">✎</button>
+          <div class="hval">${headVal}</div>
+        </div>
       </div>`;
 
     // ---- cuerpo (solo si abierto) ----
@@ -520,12 +577,15 @@ function renderCards(){
             <div class="cs"><div class="k">Posiciones</div><div class="v">${m.positions.length}</div></div>
           </div>`;
         if(m.positions.length){
-          rows=`<div class="tscroll"><table><thead><tr><th>Moneda</th><th>Lado</th><th>Tamaño</th><th>Entrada</th><th>Mark</th><th>Apal.</th><th>Liq.</th><th>uPnL</th><th>ROE</th></tr></thead><tbody>`+
+          const ages=(s&&s.posAge)||{};
+          rows=`<div class="tscroll"><table><thead><tr><th>Moneda</th><th>Lado</th><th>Edad</th><th>Tamaño</th><th>Entrada</th><th>Mark</th><th>Apal.</th><th>Liq.</th><th>uPnL</th><th>ROE</th></tr></thead><tbody>`+
             m.positions.map(p=>{
               const szi=parseFloat(p.szi),up=parseFloat(p.unrealizedPnl||0),roe=parseFloat(p.returnOnEquity||0)*100;
               const lev=p.leverage?p.leverage.value:"—";
+              const age=ages[p.coin]?ageFmt(ages[p.coin]):(s&&s.fillsRaw?"—":"…");
               return `<tr>
                 <td>${p.coin}</td><td>${dirBadge(szi)}</td>
+                <td style="color:var(--muted)">${age}</td>
                 <td>${f(Math.abs(szi),4)}</td><td>${usd(p.entryPx)}</td>
                 <td>${mids[p.coin]?usd(mids[p.coin]):'—'}</td><td>${lev}x</td>
                 <td>${p.liquidationPx?usd(p.liquidationPx):'—'}</td>
@@ -534,9 +594,9 @@ function renderCards(){
               </tr>`;
             }).join("")+`</tbody></table></div>`;
         }else{ rows=`<div class="empty">Sin posiciones abiertas ahora mismo.</div>`; }
-        if(s&&s.fills&&s.fills.length){
+        if(s&&s.fillsRaw&&s.fillsRaw.length){
           fillsHtml=`<div class="tscroll"><table><thead><tr><th>Hora</th><th>Moneda</th><th>Acción</th><th>Precio</th><th>Tamaño</th><th>PnL cerr.</th></tr></thead><tbody>`+
-            s.fills.map(x=>{const cp=parseFloat(x.closedPnl||0);return `<tr>
+            s.fillsRaw.slice(0,15).map(x=>{const cp=parseFloat(x.closedPnl||0);return `<tr>
               <td>${timeAgo(x.time)}</td><td>${x.coin}</td>
               <td class="dir">${x.dir||((x.side==='B')?'Buy':'Sell')}</td>
               <td>${usd(x.px)}</td><td>${f(Math.abs(parseFloat(x.sz)),4)}</td>
@@ -548,7 +608,10 @@ function renderCards(){
         ${stats}${rows}
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
           <span class="togg" onclick="event.stopPropagation();toggleFills('${w.addr}')">${(s&&s.fillsOpen)?'▾ ocultar historial':'▸ ver operaciones recientes'}</span>
-          <button class="mini ghost" onclick="event.stopPropagation();removeAddress('${w.addr}')">quitar wallet</button>
+          <div style="display:flex;gap:8px">
+            <button class="mini ghost" onclick="event.stopPropagation();renameWallet('${w.addr}')">✎ renombrar</button>
+            <button class="mini ghost" onclick="event.stopPropagation();removeAddress('${w.addr}')">quitar wallet</button>
+          </div>
         </div>
         <div class="fills ${(s&&s.fillsOpen)?'open':''}">${fillsHtml}</div>
       </div>`;
