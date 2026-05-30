@@ -123,6 +123,31 @@
   .empty{color:var(--dim);font-size:13px;padding:12px 2px;font-family:'JetBrains Mono',monospace}
   .fills{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px;display:none}
   .fills.open{display:block}
+
+  /* ---------- accordion ---------- */
+  .acc-head{display:flex;align-items:center;gap:12px;cursor:pointer;padding:2px 0;user-select:none}
+  .acc-head .chev{font-size:13px;color:var(--teal);transition:transform .25s;flex:0 0 auto;width:14px;text-align:center}
+  .card.open .acc-head .chev{transform:rotate(90deg)}
+  .acc-head .htitle{flex:1;min-width:0}
+  .acc-head .clabel{font-family:'Syne',sans-serif;font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .acc-head .tag-dot{font-size:9px;font-weight:700;padding:2px 7px;border-radius:20px;letter-spacing:.04em;font-family:'JetBrains Mono',monospace}
+  .acc-head .tag-dot.long{background:rgba(94,240,168,.14);color:var(--green)}
+  .acc-head .tag-dot.short{background:rgba(255,107,107,.14);color:var(--red)}
+  .acc-head .tag-dot.mix{background:rgba(255,194,75,.14);color:var(--amber)}
+  .acc-head .tag-dot.flat{background:rgba(134,167,158,.12);color:var(--dim)}
+  .acc-head .hmeta{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--dim);margin-top:2px;display:flex;gap:12px;flex-wrap:wrap}
+  .acc-head .hmeta .pnl-pos{color:var(--green)}
+  .acc-head .hmeta .pnl-neg{color:var(--red)}
+  .acc-head .hright{display:flex;align-items:center;gap:8px;flex:0 0 auto}
+  .acc-head .hval{font-family:'JetBrains Mono',monospace;font-size:15px;font-weight:700;color:var(--mint);text-align:right}
+  .acc-body{display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  .card.open .acc-body{display:block;animation:slideDown .28s ease}
+  @keyframes slideDown{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+  .card.collapsed{padding:14px 16px}
+  @media(max-width:560px){
+    .acc-head .hval{font-size:13px}
+    .acc-head .hmeta{font-size:10.5px;gap:9px}
+  }
   .togg{font-size:12px;color:var(--teal);cursor:pointer;font-family:'JetBrains Mono',monospace;margin-top:12px;display:inline-block;padding:4px 0}
   .togg:hover{color:var(--mint)}
   .dir{font-size:11px}
@@ -287,6 +312,7 @@ const snaps = {};
 let alerts = loadAlerts();
 let timer=null, countdownTimer=null, nextAt=0, notifOn=false;
 let sortKey="value", biasFilter="all";
+let openAddr=null; // wallet actualmente expandida (acordeón)
 
 /* ---------- persistencia ---------- */
 function loadWatch(){ try{const s=localStorage.getItem("hw_watch");if(s)return JSON.parse(s);}catch(e){} return [...DEFAULT_WATCH]; }
@@ -311,6 +337,7 @@ function timeAgo(ms){const s=Math.floor((Date.now()-ms)/1000);if(s<60)return s+"
 function toggleLeaderboard(){ document.getElementById("lbPanel").classList.toggle("open"); }
 function setSort(k){ sortKey=k; document.querySelectorAll("#sortSeg button").forEach(b=>b.classList.toggle("on",b.dataset.sort===k)); renderCards(); }
 function setBias(b){ biasFilter=b; document.querySelectorAll("#biasSeg button").forEach(x=>x.classList.toggle("on",x.dataset.bias===b)); renderCards(); }
+function toggleWallet(addr){ openAddr=(openAddr===addr)?null:addr; renderCards(); }
 function showToast(msg){ const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1400); }
 function copyAddr(a){ navigator.clipboard?.writeText(a).then(()=>showToast("dirección copiada")).catch(()=>{}); }
 
@@ -322,9 +349,10 @@ function addAddress(){
   if(watch.some(w=>w.addr===a)){ flashErr("Esa wallet ya está en la lista."); return; }
   watch.push({addr:a,label:(l.value.trim()||short(a))});
   saveWatch(); i.value=""; l.value="";
+  openAddr=a; // abre la recién añadida y colapsa las demás
   renderCards(); fetchAll(true);
 }
-function removeAddress(a){ watch=watch.filter(w=>w.addr!==a); delete snaps[a]; saveWatch(); renderCards(); renderAgg(); }
+function removeAddress(a){ watch=watch.filter(w=>w.addr!==a); delete snaps[a]; if(openAddr===a) openAddr=null; saveWatch(); renderCards(); renderAgg(); }
 function flashErr(m){ const e=document.getElementById("errLine"); e.textContent="⚠ "+m; setTimeout(()=>e.textContent="",4000); }
 
 /* ---------- notificaciones ---------- */
@@ -442,59 +470,91 @@ function renderCards(){
   const list=visibleWatch();
   if(!watch.length){ root.innerHTML='<div class="empty">No hay wallets en la lista. Pega una dirección 0x arriba o abre 📊 Leaderboards.</div>'; return; }
   if(!list.length){ root.innerHTML='<div class="empty">Ninguna wallet coincide con el filtro.</div>'; return; }
+
+  // Si nadie está abierto aún, abre la primera de la lista por defecto
+  if(openAddr===null && list.length) openAddr=list[0].addr;
+
   root.innerHTML=list.map(w=>{
     const st=w._state,s=snaps[w.addr];
-    let stats="",rows="",fillsHtml="";
-    if(w._err){
-      stats=`<div class="err" style="margin-top:10px;flex-basis:auto">No se pudo cargar: ${w._err}</div>`;
-    }else if(st){
-      const m=walletMetrics(w);
-      stats=`<div class="cstats">
-        <div class="cs"><div class="k">Valor cuenta</div><div class="v">${usd(m.acct)}</div></div>
-        <div class="cs"><div class="k">PnL no realiz.</div><div class="v ${m.upnl>=0?'pos':'neg'}">${m.upnl>=0?'+':''}${usd(m.upnl)}</div></div>
-        <div class="cs"><div class="k">Notional</div><div class="v">${usd(m.ntl)}</div></div>
-        <div class="cs"><div class="k">Posiciones</div><div class="v">${m.positions.length}</div></div>
-      </div>`;
-      if(m.positions.length){
-        rows=`<div class="tscroll"><table><thead><tr><th>Moneda</th><th>Lado</th><th>Tamaño</th><th>Entrada</th><th>Mark</th><th>Apal.</th><th>Liq.</th><th>uPnL</th><th>ROE</th></tr></thead><tbody>`+
-          m.positions.map(p=>{
-            const szi=parseFloat(p.szi),up=parseFloat(p.unrealizedPnl||0),roe=parseFloat(p.returnOnEquity||0)*100;
-            const lev=p.leverage?p.leverage.value:"—";
-            return `<tr>
-              <td>${p.coin}</td><td>${dirBadge(szi)}</td>
-              <td>${f(Math.abs(szi),4)}</td><td>${usd(p.entryPx)}</td>
-              <td>${mids[p.coin]?usd(mids[p.coin]):'—'}</td><td>${lev}x</td>
-              <td>${p.liquidationPx?usd(p.liquidationPx):'—'}</td>
-              <td class="${up>=0?'pos':'neg'}">${up>=0?'+':''}${f(up,0)}</td>
-              <td class="${roe>=0?'pos':'neg'}">${roe>=0?'+':''}${f(roe,1)}%</td>
-            </tr>`;
-          }).join("")+`</tbody></table></div>`;
-      }else{ rows=`<div class="empty">Sin posiciones abiertas ahora mismo.</div>`; }
-      if(s&&s.fills&&s.fills.length){
-        fillsHtml=`<div class="tscroll"><table><thead><tr><th>Hora</th><th>Moneda</th><th>Acción</th><th>Precio</th><th>Tamaño</th><th>PnL cerr.</th></tr></thead><tbody>`+
-          s.fills.map(x=>{const cp=parseFloat(x.closedPnl||0);return `<tr>
-            <td>${timeAgo(x.time)}</td><td>${x.coin}</td>
-            <td class="dir">${x.dir||((x.side==='B')?'Buy':'Sell')}</td>
-            <td>${usd(x.px)}</td><td>${f(Math.abs(parseFloat(x.sz)),4)}</td>
-            <td class="${cp>=0?'pos':'neg'}">${cp?((cp>=0?'+':'')+f(cp,0)):'—'}</td></tr>`;}).join("")+`</tbody></table></div>`;
-      }else if(s&&s.fillsOpen){ fillsHtml=`<div class="empty">Cargando o sin operaciones recientes…</div>`; }
-    }else{ stats=`<div class="empty">Cargando…</div>`; }
-    return `<div class="card" id="card-${w.addr}">
-      <div class="chead">
-        <div>
-          <div class="clabel">${w.label}</div>
-          <div class="caddr">
-            <span class="cp" onclick="copyAddr('${w.addr}')" title="copiar">${short(w.addr)} ⧉</span>
-            <a href="https://app.hyperliquid.xyz/explorer/address/${w.addr}" target="_blank" rel="noopener">explorer ↗</a>
-            <a href="https://hyperdash.info/trader/${w.addr}" target="_blank" rel="noopener">hyperdash ↗</a>
-          </div>
+    const isOpen=(w.addr===openAddr);
+    const m=walletMetrics(w);
+
+    // ---- cabecera resumen (siempre visible) ----
+    let dotCls="flat",dotTxt="sin pos.";
+    if(w._err){ dotCls="flat"; dotTxt="error"; }
+    else if(m.positions.length){
+      if(m.longs>0&&m.shorts>0){ dotCls="mix"; dotTxt=`${m.longs}L · ${m.shorts}S`; }
+      else if(m.longs>0){ dotCls="long"; dotTxt=`${m.longs} LONG`; }
+      else { dotCls="short"; dotTxt=`${m.shorts} SHORT`; }
+    }
+    const headMeta = st&&!w._err
+      ? `<span class="${m.upnl>=0?'pnl-pos':'pnl-neg'}">${m.upnl>=0?'+':''}${usd(m.upnl)}</span><span>${m.positions.length} pos.</span>`
+      : (w._err?`<span class="pnl-neg">no cargó</span>`:`<span>cargando…</span>`);
+    const headVal = st&&!w._err ? usd(m.acct) : "—";
+
+    const head=`<div class="acc-head" onclick="toggleWallet('${w.addr}')">
+        <span class="chev">▶</span>
+        <div class="htitle">
+          <div class="clabel">${w.label} <span class="tag-dot ${dotCls}">${dotTxt}</span></div>
+          <div class="hmeta">${headMeta}</div>
         </div>
-        <button class="mini ghost" onclick="removeAddress('${w.addr}')">quitar</button>
-      </div>
-      ${stats}${rows}
-      <span class="togg" onclick="toggleFills('${w.addr}')">${(s&&s.fillsOpen)?'▾ ocultar historial':'▸ ver operaciones recientes'}</span>
-      <div class="fills ${(s&&s.fillsOpen)?'open':''}">${fillsHtml}</div>
-    </div>`;
+        <div class="hright"><div class="hval">${headVal}</div></div>
+      </div>`;
+
+    // ---- cuerpo (solo si abierto) ----
+    let body="";
+    if(isOpen){
+      let stats="",rows="",fillsHtml="";
+      if(w._err){
+        stats=`<div class="err" style="margin-top:6px;flex-basis:auto">No se pudo cargar: ${w._err}</div>`;
+      }else if(st){
+        stats=`<div class="caddr" style="margin-bottom:12px">
+            <span class="cp" onclick="event.stopPropagation();copyAddr('${w.addr}')" title="copiar">${short(w.addr)} ⧉</span>
+            <a href="https://app.hyperliquid.xyz/explorer/address/${w.addr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">explorer ↗</a>
+            <a href="https://hyperdash.info/trader/${w.addr}" target="_blank" rel="noopener" onclick="event.stopPropagation()">hyperdash ↗</a>
+          </div>
+          <div class="cstats">
+            <div class="cs"><div class="k">Valor cuenta</div><div class="v">${usd(m.acct)}</div></div>
+            <div class="cs"><div class="k">PnL no realiz.</div><div class="v ${m.upnl>=0?'pos':'neg'}">${m.upnl>=0?'+':''}${usd(m.upnl)}</div></div>
+            <div class="cs"><div class="k">Notional</div><div class="v">${usd(m.ntl)}</div></div>
+            <div class="cs"><div class="k">Posiciones</div><div class="v">${m.positions.length}</div></div>
+          </div>`;
+        if(m.positions.length){
+          rows=`<div class="tscroll"><table><thead><tr><th>Moneda</th><th>Lado</th><th>Tamaño</th><th>Entrada</th><th>Mark</th><th>Apal.</th><th>Liq.</th><th>uPnL</th><th>ROE</th></tr></thead><tbody>`+
+            m.positions.map(p=>{
+              const szi=parseFloat(p.szi),up=parseFloat(p.unrealizedPnl||0),roe=parseFloat(p.returnOnEquity||0)*100;
+              const lev=p.leverage?p.leverage.value:"—";
+              return `<tr>
+                <td>${p.coin}</td><td>${dirBadge(szi)}</td>
+                <td>${f(Math.abs(szi),4)}</td><td>${usd(p.entryPx)}</td>
+                <td>${mids[p.coin]?usd(mids[p.coin]):'—'}</td><td>${lev}x</td>
+                <td>${p.liquidationPx?usd(p.liquidationPx):'—'}</td>
+                <td class="${up>=0?'pos':'neg'}">${up>=0?'+':''}${f(up,0)}</td>
+                <td class="${roe>=0?'pos':'neg'}">${roe>=0?'+':''}${f(roe,1)}%</td>
+              </tr>`;
+            }).join("")+`</tbody></table></div>`;
+        }else{ rows=`<div class="empty">Sin posiciones abiertas ahora mismo.</div>`; }
+        if(s&&s.fills&&s.fills.length){
+          fillsHtml=`<div class="tscroll"><table><thead><tr><th>Hora</th><th>Moneda</th><th>Acción</th><th>Precio</th><th>Tamaño</th><th>PnL cerr.</th></tr></thead><tbody>`+
+            s.fills.map(x=>{const cp=parseFloat(x.closedPnl||0);return `<tr>
+              <td>${timeAgo(x.time)}</td><td>${x.coin}</td>
+              <td class="dir">${x.dir||((x.side==='B')?'Buy':'Sell')}</td>
+              <td>${usd(x.px)}</td><td>${f(Math.abs(parseFloat(x.sz)),4)}</td>
+              <td class="${cp>=0?'pos':'neg'}">${cp?((cp>=0?'+':'')+f(cp,0)):'—'}</td></tr>`;}).join("")+`</tbody></table></div>`;
+        }else if(s&&s.fillsOpen){ fillsHtml=`<div class="empty">Cargando o sin operaciones recientes…</div>`; }
+      }else{ stats=`<div class="empty">Cargando…</div>`; }
+
+      body=`<div class="acc-body">
+        ${stats}${rows}
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <span class="togg" onclick="event.stopPropagation();toggleFills('${w.addr}')">${(s&&s.fillsOpen)?'▾ ocultar historial':'▸ ver operaciones recientes'}</span>
+          <button class="mini ghost" onclick="event.stopPropagation();removeAddress('${w.addr}')">quitar wallet</button>
+        </div>
+        <div class="fills ${(s&&s.fillsOpen)?'open':''}">${fillsHtml}</div>
+      </div>`;
+    }
+
+    return `<div class="card ${isOpen?'open':'collapsed'}" id="card-${w.addr}">${head}${body}</div>`;
   }).join("");
 }
 
